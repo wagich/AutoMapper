@@ -1,6 +1,4 @@
-﻿using AutoMapper.Internal;
-using System.Linq.Expressions;
-
+﻿using System.Linq.Expressions;
 namespace AutoMapper.Internal.Mappers
 {
     public abstract class EnumerableMapperBase : IObjectMapperInfo

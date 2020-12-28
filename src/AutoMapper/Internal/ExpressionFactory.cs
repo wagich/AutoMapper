@@ -2,6 +2,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Linq.Expressions;
@@ -266,101 +267,115 @@ namespace AutoMapper.Internal
         {
             public override void Replace(Expression oldNode, Expression newNode) => base.Replace(oldNode, ToType(newNode, oldNode.Type));
         }
-        public static Expression MapCollectionExpression(IGlobalConfiguration configurationProvider, ProfileMap profileMap, MemberMap memberMap, Expression sourceExpression, Expression destExpression)
+        private static bool IsReadOnlyDictionaryType(this Type type) => type.IsGenericType(typeof(IReadOnlyDictionary<,>)) || type.IsGenericType(typeof(ReadOnlyDictionary<,>));
+        public static Expression MapCollection(IGlobalConfiguration configurationProvider, ProfileMap profileMap, MemberMap memberMap, Expression sourceExpression, Expression destExpression)
         {
-            MethodInfo addMethod;
-            bool isIList;
-            Type destinationCollectionType, destinationElementType;
-            GetDestinationType();
-            var passedDestination = Variable(destExpression.Type, "passedDestination");
-            var newExpression = Variable(passedDestination.Type, "collectionDestination");
-            var sourceElementType = sourceExpression.Type.GetICollectionType()?.GenericTypeArguments[0] ?? GetEnumerableElementType(sourceExpression.Type);
-            var itemParam = Parameter(sourceElementType, "item");
-            var itemExpr = MapExpression(configurationProvider, profileMap, new TypePair(sourceElementType, destinationElementType), itemParam);
-            Expression destination, assignNewExpression;
-            UseDestinationValue();
-            var addItems = ForEach(itemParam, sourceExpression, Call(destination, addMethod, itemExpr));
-            var overMaxDepth = OverMaxDepth(memberMap?.TypeMap);
-            if (overMaxDepth != null)
+            var destinationType = destExpression.Type;
+            if (destinationType.IsGenericType(typeof(ReadOnlyCollection<>)))
             {
-                addItems = Condition(overMaxDepth, Empty, addItems);
+                return MapReadOnlyCollection(typeof(List<>), typeof(ReadOnlyCollection<>));
             }
-            var clearMethod = isIList ? IListClear : destinationCollectionType.GetMethod("Clear");
-            var checkNull = Block(new[] { newExpression, passedDestination },
-                    Assign(passedDestination, destExpression),
-                    assignNewExpression,
-                    Call(destination, clearMethod),
-                    addItems,
-                    destination);
-            if (memberMap != null)
+            if (destinationType.IsReadOnlyDictionaryType())
             {
-                return checkNull;
+                return MapReadOnlyCollection(typeof(Dictionary<,>), typeof(ReadOnlyDictionary<,>));
             }
-            return CheckContext();
-            void GetDestinationType()
+            return MapCollectionCore(destExpression);
+            Expression MapReadOnlyCollection(Type genericCollectionType, Type genericReadOnlyCollectionType)
             {
-                destinationCollectionType = destExpression.Type.GetICollectionType();
-                destinationElementType = destinationCollectionType?.GenericTypeArguments[0] ?? GetEnumerableElementType(destExpression.Type);
-                if (destinationCollectionType == null && destExpression.Type.IsInterface)
-                {
-                    destinationCollectionType = typeof(ICollection<>).MakeGenericType(destinationElementType);
-                    destExpression = ToType(destExpression, destinationCollectionType);
-                }
-                if (destinationCollectionType == null)
-                {
-                    destinationCollectionType = typeof(IList);
-                    addMethod = IListAdd;
-                    isIList = true;
-                }
-                else
-                {
-                    isIList = destExpression.Type.IsListType();
-                    addMethod = destinationCollectionType.GetMethod("Add");
-                }
+                var destinationTypeArguments = destinationType.GenericTypeArguments;
+                var closedCollectionType = genericCollectionType.MakeGenericType(destinationTypeArguments);
+                var dict = MapCollectionCore(Default(closedCollectionType));
+                var readOnlyClosedType = destinationType.IsInterface ? genericReadOnlyCollectionType.MakeGenericType(destinationTypeArguments) : destinationType;
+                return New(readOnlyClosedType.GetConstructors()[0], dict);
             }
-            void UseDestinationValue()
+            Expression MapCollectionCore(Expression destExpression)
             {
-                if (memberMap is { UseDestinationValue: true })
+                var destinationType = destExpression.Type;
+                MethodInfo addMethod;
+                bool isIList;
+                Type destinationCollectionType, destinationElementType;
+                GetDestinationType();
+                var passedDestination = Variable(destExpression.Type, "passedDestination");
+                var newExpression = Variable(passedDestination.Type, "collectionDestination");
+                var sourceElementType = sourceExpression.Type.GetICollectionType()?.GenericTypeArguments[0] ?? GetEnumerableElementType(sourceExpression.Type);
+                var itemParam = Parameter(sourceElementType, "item");
+                var itemExpr = MapExpression(configurationProvider, profileMap, new TypePair(sourceElementType, destinationElementType), itemParam);
+                Expression destination, assignNewExpression;
+                UseDestinationValue();
+                var addItems = ForEach(itemParam, sourceExpression, Call(destination, addMethod, itemExpr));
+                var overMaxDepth = OverMaxDepth(memberMap?.TypeMap);
+                if (overMaxDepth != null)
                 {
-                    destination = passedDestination;
-                    assignNewExpression = Empty;
+                    addItems = Condition(overMaxDepth, Empty, addItems);
                 }
-                else
+                var clearMethod = isIList ? IListClear : destinationCollectionType.GetMethod("Clear");
+                var checkNull = Block(new[] { newExpression, passedDestination },
+                        Assign(passedDestination, destExpression),
+                        assignNewExpression,
+                        Call(destination, clearMethod),
+                        addItems,
+                        destination);
+                if (memberMap != null)
                 {
-                    destination = newExpression;
-                    var createInstance = ObjectFactory.GenerateConstructorExpression(passedDestination.Type);
-                    var shouldCreateDestination = ReferenceEqual(passedDestination, Null);
-                    if (memberMap is { CanBeSet: true })
+                    return checkNull;
+                }
+                return CheckContext();
+                void GetDestinationType()
+                {
+                    destinationCollectionType = destinationType.GetICollectionType();
+                    destinationElementType = destinationCollectionType?.GenericTypeArguments[0] ?? GetEnumerableElementType(destinationType);
+                    if (destinationCollectionType == null && destinationType.IsInterface)
                     {
-                        var isReadOnly = isIList ? Expression.Property(passedDestination, IListIsReadOnly) : Property(ToType(passedDestination, destinationCollectionType), "IsReadOnly");
-                        shouldCreateDestination = OrElse(shouldCreateDestination, isReadOnly);
+                        destinationCollectionType = typeof(ICollection<>).MakeGenericType(destinationElementType);
+                        destExpression = ToType(destExpression, destinationCollectionType);
                     }
-                    assignNewExpression = Assign(newExpression, Condition(shouldCreateDestination, ToType(createInstance, passedDestination.Type), passedDestination));
+                    if (destinationCollectionType == null)
+                    {
+                        destinationCollectionType = typeof(IList);
+                        addMethod = IListAdd;
+                        isIList = true;
+                    }
+                    else
+                    {
+                        isIList = destExpression.Type.IsListType();
+                        addMethod = destinationCollectionType.GetMethod("Add");
+                    }
+                }
+                void UseDestinationValue()
+                {
+                    if (memberMap is { UseDestinationValue: true })
+                    {
+                        destination = passedDestination;
+                        assignNewExpression = Empty;
+                    }
+                    else
+                    {
+                        destination = newExpression;
+                        var createInstance = ObjectFactory.GenerateConstructorExpression(passedDestination.Type);
+                        var shouldCreateDestination = ReferenceEqual(passedDestination, Null);
+                        if (memberMap is { CanBeSet: true })
+                        {
+                            var isReadOnly = isIList ? Expression.Property(passedDestination, IListIsReadOnly) : Property(ToType(passedDestination, destinationCollectionType), "IsReadOnly");
+                            shouldCreateDestination = OrElse(shouldCreateDestination, isReadOnly);
+                        }
+                        assignNewExpression = Assign(newExpression, Condition(shouldCreateDestination, ToType(createInstance, passedDestination.Type), passedDestination));
+                    }
+                }
+                Expression CheckContext()
+                {
+                    var elementTypeMap = configurationProvider.ResolveTypeMap(sourceElementType, destinationElementType);
+                    if (elementTypeMap == null)
+                    {
+                        return checkNull;
+                    }
+                    var checkContext = ExpressionBuilder.CheckContext(elementTypeMap);
+                    if (checkContext == null)
+                    {
+                        return checkNull;
+                    }
+                    return Block(checkContext, checkNull);
                 }
             }
-            Expression CheckContext()
-            {
-                var elementTypeMap = configurationProvider.ResolveTypeMap(sourceElementType, destinationElementType);
-                if (elementTypeMap == null)
-                {
-                    return checkNull;
-                }
-                var checkContext = ExpressionBuilder.CheckContext(elementTypeMap);
-                if (checkContext == null)
-                {
-                    return checkNull;
-                }
-                return Block(checkContext, checkNull);
-            }
-        }
-        public static Expression MapReadOnlyCollection(Type genericCollectionType, Type genericReadOnlyCollectionType, IGlobalConfiguration configurationProvider,
-            ProfileMap profileMap, MemberMap memberMap, Expression sourceExpression, Expression destExpression)
-        {
-            var destinationTypeArguments = destExpression.Type.GenericTypeArguments;
-            var closedCollectionType = genericCollectionType.MakeGenericType(destinationTypeArguments);
-            var dict = MapCollectionExpression(configurationProvider, profileMap, memberMap, sourceExpression, Default(closedCollectionType));
-            var readOnlyClosedType = destExpression.Type.IsInterface ? genericReadOnlyCollectionType.MakeGenericType(destinationTypeArguments) : destExpression.Type;
-            return New(readOnlyClosedType.GetConstructors()[0], dict);
         }
     }
     public readonly struct Member

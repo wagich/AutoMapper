@@ -2,8 +2,6 @@
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
-using AutoMapper.Internal;
-
 namespace AutoMapper.Internal.Mappers
 {
     using static Expression;
@@ -14,7 +12,7 @@ namespace AutoMapper.Internal.Mappers
         public bool IsMatch(in TypePair context) => typeof(IDictionary<string, object>).IsAssignableFrom(context.DestinationType);
         public Expression MapExpression(IGlobalConfiguration configurationProvider, ProfileMap profileMap,
             MemberMap memberMap, Expression sourceExpression, Expression destExpression)
-            => MapCollectionExpression(configurationProvider, profileMap, memberMap,
+            => MapCollection(configurationProvider, profileMap, memberMap,
                 Call(MembersDictionaryMethodInfo, sourceExpression, Constant(profileMap)), destExpression);
         private static Dictionary<string, object> MembersDictionary(object source, ProfileMap profileMap)
         {
