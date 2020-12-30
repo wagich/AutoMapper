@@ -112,6 +112,7 @@ namespace AutoMapper.Execution
         }
         public static Expression ContextMap(in TypePair typePair, Expression sourceParameter, Expression destinationParameter, MemberMap memberMap)
         {
+            Console.WriteLine("ContextMap");
             var mapMethod = ContextMapMethod.MakeGenericMethod(typePair.SourceType, typePair.DestinationType);
             return Call(ContextParameter, mapMethod, sourceParameter, destinationParameter, Constant(memberMap, typeof(MemberMap)));
         }
