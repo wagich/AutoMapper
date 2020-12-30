@@ -27,9 +27,6 @@ namespace AutoMapper.Internal
         public static readonly Expression Zero = Constant(0, typeof(int));
         public static readonly ParameterExpression ExceptionParameter = Parameter(typeof(Exception), "ex");
         public static readonly ParameterExpression ContextParameter = Parameter(typeof(ResolutionContext), "context");
-        private static readonly MethodInfo CopyToMethod = typeof(Array).GetMethod("CopyTo", new[] { typeof(Array), typeof(int) });
-        private static readonly MethodInfo CountMethod = typeof(Enumerable).StaticGenericMethod("Count", parametersCount: 1);
-        private static readonly MethodInfo MapMultidimensionalMethod = typeof(ExpressionFactory).GetStaticMethod(nameof(MapMultidimensional));
         public static bool IsQuery(this Expression expression) => expression is MethodCallExpression { Method: { IsStatic: true } method } && method.DeclaringType == typeof(Enumerable);
         public static Expression Chain(this IEnumerable<Expression> expressions, Expression parameter) => expressions.Aggregate(parameter,
             (left, right) => right is LambdaExpression lambda ? lambda.ReplaceParameters(left) : right.Replace(right.GetChain().FirstOrDefault().Target, left));
@@ -277,7 +274,7 @@ namespace AutoMapper.Internal
             var destinationType = destExpression.Type;
             if (destinationType.IsArray)
             {
-                return MapToArray();
+                return ArrayMapper.MapToArray(configurationProvider, profileMap, sourceExpression, destinationType);
             }
             if (destinationType.IsGenericType(typeof(ReadOnlyCollection<>)))
             {
@@ -292,46 +289,6 @@ namespace AutoMapper.Internal
                 return CreateNameValueCollection(sourceExpression);
             }
             return MapCollectionCore(destExpression);
-            Expression MapToArray()
-            {
-                var destinationElementType = destinationType.GetElementType();
-                if (destinationType.GetArrayRank() > 1)
-                {
-                    return Call(MapMultidimensionalMethod, sourceExpression, Constant(destinationElementType), ContextParameter);
-                }
-                var sourceType = sourceExpression.Type;
-                Type sourceElementType;
-                Expression createDestination;
-                var destination = Parameter(destinationType, "destinationArray");
-                if (sourceType.IsArray)
-                {
-                    sourceElementType = sourceType.GetElementType();
-                    createDestination = Assign(destination, NewArrayBounds(destinationElementType, ArrayLength(sourceExpression)));
-                    if (destinationType == sourceType && sourceElementType.IsPrimitive() &&
-                        configurationProvider.FindTypeMapFor(sourceElementType, destinationElementType) == null)
-                    {
-                        return Block(new[] { destination },
-                            createDestination,
-                            Call(sourceExpression, CopyToMethod, destination, Zero),
-                            destination);
-                    }
-                }
-                else
-                {
-                    sourceElementType = GetEnumerableElementType(sourceExpression.Type);
-                    var count = Call(CountMethod.MakeGenericMethod(sourceElementType), sourceExpression);
-                    createDestination = Assign(destination, NewArrayBounds(destinationElementType, count));
-                }
-                var itemParam = Parameter(sourceElementType, "sourceItem");
-                var itemExpr = ExpressionBuilder.MapExpression(configurationProvider, profileMap, new TypePair(sourceElementType, destinationElementType), itemParam);
-                var indexParam = Parameter(typeof(int), "destinationArrayIndex");
-                var setItem = Assign(ArrayAccess(destination, PostIncrementAssign(indexParam)), itemExpr);
-                return Block(new[] { destination, indexParam },
-                    createDestination,
-                    Assign(indexParam, Zero),
-                    ForEach(itemParam, sourceExpression, setItem),
-                    destination);
-            }
             Expression MapReadOnlyCollection(Type genericCollectionType, Type genericReadOnlyCollectionType)
             {
                 var destinationTypeArguments = destinationType.GenericTypeArguments;
@@ -431,16 +388,62 @@ namespace AutoMapper.Internal
         }
         private static Expression CreateNameValueCollection(Expression sourceExpression) =>
             New(typeof(NameValueCollection).GetConstructor(new[] { typeof(NameValueCollection) }), sourceExpression);
-        private static Array MapMultidimensional(Array source, Type destinationElementType, ResolutionContext context)
+        static class ArrayMapper
         {
-            var sourceElementType = source.GetType().GetElementType();
-            var destinationArray = Array.CreateInstance(destinationElementType, Enumerable.Range(0, source.Rank).Select(source.GetLength).ToArray());
-            var filler = new MultidimensionalArrayFiller(destinationArray);
-            foreach (var item in source)
+            private static readonly MethodInfo CopyToMethod = typeof(Array).GetMethod("CopyTo", new[] { typeof(Array), typeof(int) });
+            private static readonly MethodInfo CountMethod = typeof(Enumerable).StaticGenericMethod("Count", parametersCount: 1);
+            private static readonly MethodInfo MapMultidimensionalMethod = typeof(ArrayMapper).GetStaticMethod(nameof(MapMultidimensional));
+            private static Array MapMultidimensional(Array source, Type destinationElementType, ResolutionContext context)
             {
-                filler.NewValue(context.Map(item, null, sourceElementType, destinationElementType, null));
+                var sourceElementType = source.GetType().GetElementType();
+                var destinationArray = Array.CreateInstance(destinationElementType, Enumerable.Range(0, source.Rank).Select(source.GetLength).ToArray());
+                var filler = new MultidimensionalArrayFiller(destinationArray);
+                foreach (var item in source)
+                {
+                    filler.NewValue(context.Map(item, null, sourceElementType, destinationElementType, null));
+                }
+                return destinationArray;
             }
-            return destinationArray;
+            public static Expression MapToArray(IGlobalConfiguration configurationProvider, ProfileMap profileMap, Expression sourceExpression, Type destinationType)
+            {
+                var destinationElementType = destinationType.GetElementType();
+                if (destinationType.GetArrayRank() > 1)
+                {
+                    return Call(MapMultidimensionalMethod, sourceExpression, Constant(destinationElementType), ContextParameter);
+                }
+                var sourceType = sourceExpression.Type;
+                Type sourceElementType;
+                Expression createDestination;
+                var destination = Parameter(destinationType, "destinationArray");
+                if (sourceType.IsArray)
+                {
+                    sourceElementType = sourceType.GetElementType();
+                    createDestination = Assign(destination, NewArrayBounds(destinationElementType, ArrayLength(sourceExpression)));
+                    if (destinationType == sourceType && sourceElementType.IsPrimitive() &&
+                        configurationProvider.FindTypeMapFor(sourceElementType, destinationElementType) == null)
+                    {
+                        return Block(new[] { destination },
+                            createDestination,
+                            Call(sourceExpression, CopyToMethod, destination, Zero),
+                            destination);
+                    }
+                }
+                else
+                {
+                    sourceElementType = GetEnumerableElementType(sourceExpression.Type);
+                    var count = Call(CountMethod.MakeGenericMethod(sourceElementType), sourceExpression);
+                    createDestination = Assign(destination, NewArrayBounds(destinationElementType, count));
+                }
+                var itemParam = Parameter(sourceElementType, "sourceItem");
+                var itemExpr = MapExpression(configurationProvider, profileMap, new TypePair(sourceElementType, destinationElementType), itemParam);
+                var indexParam = Parameter(typeof(int), "destinationArrayIndex");
+                var setItem = Assign(ArrayAccess(destination, PostIncrementAssign(indexParam)), itemExpr);
+                return Block(new[] { destination, indexParam },
+                    createDestination,
+                    Assign(indexParam, Zero),
+                    ForEach(itemParam, sourceExpression, setItem),
+                    destination);
+            }
         }
     }
     public readonly struct Member
