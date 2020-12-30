@@ -4,6 +4,7 @@ using AutoMapper.Internal.Mappers;
 using System.Collections.Generic;
 using System;
 using System.Linq;
+using AutoMapper.Internal;
 
 namespace AutoMapper.UnitTests.Bug
 {

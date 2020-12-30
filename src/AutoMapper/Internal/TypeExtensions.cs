@@ -13,6 +13,8 @@ namespace AutoMapper.Internal
         public const BindingFlags InstanceFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         public const BindingFlags StaticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
+        public static bool IsPrimitive(this Type type) => type.IsPrimitive || type == typeof(string) || type == typeof(decimal);
+
         public static void CheckIsDerivedFrom(this Type derivedType, Type baseType)
         {
             if (!baseType.IsAssignableFrom(derivedType) && !derivedType.IsGenericTypeDefinition && !baseType.IsGenericTypeDefinition)
