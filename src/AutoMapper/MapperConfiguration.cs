@@ -32,6 +32,7 @@ namespace AutoMapper
         private readonly bool _enableNullPropagationForQueryMapping;
         private readonly Func<Type, object> _serviceCtor;
         private readonly bool _sealed;
+        private readonly bool _hasOpenMaps;
 
         public MapperConfiguration(MapperConfigurationExpression configurationExpression)
         {
@@ -63,6 +64,7 @@ namespace AutoMapper
             }
             Profiles = profileMaps;
             _configuredMaps = new(typeMapsCount);
+            _hasOpenMaps = openTypeMapsCount > 0;
             _runtimeMaps = new(GetTypeMap, openTypeMapsCount);
             _resolvedMaps = new(2 * typeMapsCount);
             _resolvedMappers = new(typeMapsCount);
@@ -379,44 +381,48 @@ namespace AutoMapper
         }
         private TypeMap FindClosedGenericTypeMapFor(in TypePair typePair)
         {
-            if (!typePair.IsGeneric)
+            if (!_hasOpenMaps || !typePair.IsGeneric)
             {
                 return null;
             }
-            var genericTypePair = typePair.GetTypeDefinitionIfGeneric();
-            var userMap =
-                FindTypeMapFor(genericTypePair.SourceType, typePair.DestinationType) ??
-                FindTypeMapFor(typePair.SourceType, genericTypePair.DestinationType) ??
-                FindTypeMapFor(genericTypePair);
-            ITypeMapConfiguration genericMapConfig;
-            ProfileMap profile;
-            TypeMap cachedMap;
-            TypePair closedTypes;
-            if (userMap != null && userMap.DestinationTypeOverride == null)
+            return FindClosedGenericMap(typePair);
+            TypeMap FindClosedGenericMap(in TypePair typePair)
             {
-                genericMapConfig = userMap.Profile.GetGenericMap(userMap.Types);
-                profile = userMap.Profile;
-                cachedMap = null;
-                closedTypes = typePair;
-            }
-            else
-            {
-                var foundGenericMap = _resolvedMaps.TryGetValue(genericTypePair, out cachedMap) && cachedMap.Types.ContainsGenericParameters;
-                if (!foundGenericMap)
+                var genericTypePair = typePair.GetTypeDefinitionIfGeneric();
+                var userMap =
+                    FindTypeMapFor(genericTypePair.SourceType, typePair.DestinationType) ??
+                    FindTypeMapFor(typePair.SourceType, genericTypePair.DestinationType) ??
+                    FindTypeMapFor(genericTypePair);
+                ITypeMapConfiguration genericMapConfig;
+                ProfileMap profile;
+                TypeMap cachedMap;
+                TypePair closedTypes;
+                if (userMap != null && userMap.DestinationTypeOverride == null)
                 {
-                    return cachedMap;
+                    genericMapConfig = userMap.Profile.GetGenericMap(userMap.Types);
+                    profile = userMap.Profile;
+                    cachedMap = null;
+                    closedTypes = typePair;
                 }
-                genericMapConfig = cachedMap.Profile.GetGenericMap(cachedMap.Types);
-                profile = cachedMap.Profile;
-                closedTypes = cachedMap.Types.CloseGenericTypes(typePair);
+                else
+                {
+                    var foundGenericMap = _resolvedMaps.TryGetValue(genericTypePair, out cachedMap) && cachedMap.Types.ContainsGenericParameters;
+                    if (!foundGenericMap)
+                    {
+                        return cachedMap;
+                    }
+                    genericMapConfig = cachedMap.Profile.GetGenericMap(cachedMap.Types);
+                    profile = cachedMap.Profile;
+                    closedTypes = cachedMap.Types.CloseGenericTypes(typePair);
+                }
+                if (genericMapConfig == null)
+                {
+                    return null;
+                }
+                var typeMap = profile.CreateClosedGenericTypeMap(genericMapConfig, closedTypes, this);
+                cachedMap?.CopyInheritedMapsTo(typeMap);
+                return typeMap;
             }
-            if (genericMapConfig == null)
-            {
-                return null;
-            }
-            var typeMap = profile.CreateClosedGenericTypeMap(genericMapConfig, closedTypes, this);
-            cachedMap?.CopyInheritedMapsTo(typeMap);
-            return typeMap;
         }
         IObjectMapper IGlobalConfiguration.FindMapper(in TypePair types) => FindMapper(types);
         IObjectMapper FindMapper(in TypePair types)

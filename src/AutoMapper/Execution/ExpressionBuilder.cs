@@ -318,7 +318,7 @@ namespace AutoMapper.Execution
             return newLambda;
         }
         public static Expression Replace(this Expression exp, Expression old, Expression replace) => new ReplaceVisitor(old, replace).Visit(exp);
-        public static Expression NullCheck(this Expression expression, Type destinationType = null)
+        public static Expression NullCheck(this Expression expression, Type destinationType = null, Expression defaultValue = null)
         {
             var chain = expression.GetChain();
             if (chain.Count == 0 || chain.Peek().Target is not ParameterExpression parameter)
@@ -326,7 +326,7 @@ namespace AutoMapper.Execution
                 return expression;
             }
             var returnType = (destinationType != null && Nullable.GetUnderlyingType(destinationType) == expression.Type) ? destinationType : expression.Type;
-            var defaultReturn = Default(returnType);
+            var defaultReturn = defaultValue?.Type == returnType ? defaultValue : Default(returnType);
             ParameterExpression[] variables = null;
             var name = parameter.Name;
             int index = 0;
